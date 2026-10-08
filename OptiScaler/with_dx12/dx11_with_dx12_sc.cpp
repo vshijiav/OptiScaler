@@ -137,6 +137,28 @@ bool IsSame(IDXGISwapChain* swapchain, UINT bufferCount, UINT width, UINT height
     return resolvedBufferCount == desc.BufferCount && resolvedWidth == desc.BufferDesc.Width &&
            resolvedHeight == desc.BufferDesc.Height && resolvedFormat == desc.BufferDesc.Format && flags == desc.Flags;
 }
+
+// The FG swapchain is a DX12 flip-model swapchain created from an adapted desc (see
+// PrepareDx12InteropDesc*): it can't use _SRGB formats or fewer than 2 buffers. Resizing it
+// with the game's legacy DX11 values (e.g. Genshin: 1 buffer, R8G8B8A8_UNORM_SRGB) fails with
+// E_INVALIDARG and leaves the interop backbuffers released, so apply the same adaptation here.
+DXGI_FORMAT AdaptFgResizeFormat(DXGI_FORMAT format)
+{
+    switch (format)
+    {
+    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+        return DXGI_FORMAT_R8G8B8A8_UNORM;
+
+    case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+        return DXGI_FORMAT_B8G8R8A8_UNORM;
+
+    default:
+        return format;
+    }
+}
+
+// 0 keeps the FG swapchain's own buffer count
+constexpr UINT FgResizeBufferCount = 0;
 } // namespace
 
 Dx11wDx12SC::Dx11wDx12SC(IDXGISwapChain* real, IDXGISwapChain4* fgSC, ID3D11Device* pDevice, HWND hWnd, UINT flags)
@@ -479,7 +501,8 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers(UINT BufferCount, UINT Widt
     LOG_DEBUG("Dx11wDx12SC ResizeBuffers: count {}, size {}x{}, format {}, flags {:X}", BufferCount, Width, Height,
               (UINT) NewFormat, SwapChainFlags);
 
-    const bool skipFgResize = IsSame(_fgSwapChain, BufferCount, Width, Height, NewFormat, SwapChainFlags);
+    const DXGI_FORMAT fgFormat = AdaptFgResizeFormat(NewFormat);
+    const bool skipFgResize = IsSame(_fgSwapChain, FgResizeBufferCount, Width, Height, fgFormat, SwapChainFlags);
     const bool synchronizeXeFGPresent = skipFgResize && State::Instance().activeFgOutput == FGOutput::XeFG &&
                                         State::Instance().swapchainInteropApi == SwapchainInteropApi::Dx11wDx12;
 
@@ -523,7 +546,7 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers(UINT BufferCount, UINT Widt
         }
         else
         {
-            fgResult = _fgSwapChain->ResizeBuffers(BufferCount, Width, Height, NewFormat, SwapChainFlags);
+            fgResult = _fgSwapChain->ResizeBuffers(FgResizeBufferCount, Width, Height, fgFormat, SwapChainFlags);
         }
     }
 
@@ -726,7 +749,8 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers1(UINT BufferCount, UINT Wid
     if (_real3 == nullptr)
         return ResizeBuffers(BufferCount, Width, Height, Format, SwapChainFlags);
 
-    const bool skipFgResize = IsSame(_fgSwapChain, BufferCount, Width, Height, Format, SwapChainFlags);
+    const DXGI_FORMAT fgFormat = AdaptFgResizeFormat(Format);
+    const bool skipFgResize = IsSame(_fgSwapChain, FgResizeBufferCount, Width, Height, fgFormat, SwapChainFlags);
     const bool synchronizeXeFGPresent = skipFgResize && State::Instance().activeFgOutput == FGOutput::XeFG &&
                                         State::Instance().swapchainInteropApi == SwapchainInteropApi::Dx11wDx12;
 
@@ -771,7 +795,7 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers1(UINT BufferCount, UINT Wid
         }
         else
         {
-            fgResult = _fgSwapChain->ResizeBuffers(BufferCount, Width, Height, Format, SwapChainFlags);
+            fgResult = _fgSwapChain->ResizeBuffers(FgResizeBufferCount, Width, Height, fgFormat, SwapChainFlags);
         }
     }
 
