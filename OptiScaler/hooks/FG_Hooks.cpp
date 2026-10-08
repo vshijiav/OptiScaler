@@ -1206,7 +1206,11 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
         {
             std::optional<double> upscalerTimeOpt {};
 
-            if (state.swapchainInteropApi == SwapchainInteropApi::Dx11wDx12 && state.currentD3D11Device != nullptr)
+            // Same check as the non-FG path in wrapped_swapchain.cpp: a DX11 game can also drive a native DX12
+            // feature through its own D3D12 device (e.g. Genshin's FSR bridge), and passing the D3D11 context to it
+            // makes it call ID3D12CommandQueue methods on that context and crash inside d3d11.dll.
+            if (state.swapchainInteropApi == SwapchainInteropApi::Dx11wDx12 && state.currentD3D11Device != nullptr &&
+                (currentFeature->Api() == API::DX11 || currentFeature->IsWithDx12()))
             {
                 ID3D11DeviceContext* context = nullptr;
                 state.currentD3D11Device->GetImmediateContext(&context);
