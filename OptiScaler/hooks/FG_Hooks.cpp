@@ -13,6 +13,8 @@
 #include <hudfix/Hudfix_Dx12.h>
 #include <resource_tracking/ResTrack_Dx12.h>
 
+#include <upscalers/IFeature_Dx12.h>
+
 #include <misc/FrameLimit.h>
 
 #include <misc/IdentifyGpu.h>
@@ -35,6 +37,29 @@ static HANDLE _semaphore = nullptr;
 #if (XEFG_RESOURCE_REF_LIMIT == 0)
 inline static std::vector<void*> oldBackBuffers;
 #endif
+
+// A DX11 game can drive a native DX12 feature through its own D3D12 device (e.g. Genshin's FSR bridge). Its
+// timestamps can be read with any queue on the same adapter, such as the Dx11wDx12 interop queue, since the queue is
+// only used for the timestamp frequency.
+static bool QueueMatchesFeatureAdapter(ID3D12CommandQueue* queue, IFeature* feature)
+{
+    if (feature == nullptr || feature->Api() != API::DX12 || feature->IsWithDx12())
+        return false;
+
+    auto dx12Feature = dynamic_cast<IFeature_Dx12*>(feature);
+    if (queue == nullptr || dx12Feature == nullptr || dx12Feature->GetDevice() == nullptr)
+        return false;
+
+    ID3D12Device* queueDevice = nullptr;
+    if (FAILED(queue->GetDevice(IID_PPV_ARGS(&queueDevice))) || queueDevice == nullptr)
+        return false;
+
+    const LUID queueLuid = queueDevice->GetAdapterLuid();
+    const LUID featureLuid = dx12Feature->GetDevice()->GetAdapterLuid();
+    queueDevice->Release();
+
+    return queueLuid.LowPart == featureLuid.LowPart && queueLuid.HighPart == featureLuid.HighPart;
+}
 
 static bool WaitForQueueIdle(ID3D12CommandQueue* queue, ID3D12Fence* fence, HANDLE fenceEvent, UINT64& fenceValue)
 {
@@ -1207,7 +1232,10 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
 
                 context->Release();
             }
-            else if (state.swapchainInteropApi == SwapchainInteropApi::None && state.currentCommandQueue != nullptr)
+            else if (state.currentCommandQueue != nullptr &&
+                     (state.swapchainInteropApi == SwapchainInteropApi::None ||
+                      (state.swapchainInteropApi == SwapchainInteropApi::Dx11wDx12 &&
+                       QueueMatchesFeatureAdapter(state.currentCommandQueue, currentFeature))))
             {
                 if (upscalerTimeOpt = currentFeature->ReadUpscalerTime(state.currentCommandQueue);
                     upscalerTimeOpt.has_value())
