@@ -628,11 +628,34 @@ sl::Result StreamlineHooks::hkslSetTagForFrame(const sl::FrameToken& frame, cons
     return result;
 }
 
+// Streamline's NIS doesn't work on non-Nvidia GPUs: on AMD Vulkan its descriptor set allocation fails with
+// VK_ERROR_OUT_OF_POOL_MEMORY and it still dispatches, crashing inside the driver on every evaluation. Games that pair
+// DLSS with NIS only reach it once Opti makes DLSS available, so skip NIS there instead of crashing the game.
+static bool SkipStreamlineNIS(sl::Feature feature)
+{
+    if (feature != sl::kFeatureNIS)
+        return false;
+
+    static const bool nonNvidia = IdentifyGpu::getPrimaryGpu().vendorId != VendorId::Nvidia;
+    static bool logged = false;
+
+    if (nonNvidia && !logged)
+    {
+        LOG_INFO("Skipping Streamline NIS on non-Nvidia GPU");
+        logged = true;
+    }
+
+    return nonNvidia;
+}
+
 sl::Result StreamlineHooks::hkslEvaluateFeature(sl::Feature feature, const sl::FrameToken& frame,
                                                 const sl::BaseStructure** inputs, uint32_t numInputs,
                                                 sl::CommandBuffer* cmdBuffer)
 {
     LOG_DEBUG("frameIndex: {}", static_cast<uint32_t>(frame));
+
+    if (SkipStreamlineNIS(feature))
+        return sl::Result::eOk;
 
     if (State::Instance().activeFgInput == FGInput::DLSSG && numInputs > 0 && inputs != nullptr)
     {
@@ -664,7 +687,7 @@ sl::Result StreamlineHooks::hkslEvaluateFeature(sl::Feature feature, const sl::F
 sl::Result StreamlineHooks::hkslAllocateResources(sl::CommandBuffer* cmdBuffer, sl::Feature feature,
                                                   const sl::ViewportHandle& viewport)
 {
-    if (feature == sl::kFeatureDLSS_G)
+    if (feature == sl::kFeatureDLSS_G || SkipStreamlineNIS(feature))
         return sl::Result::eOk;
 
     return o_slAllocateResources(cmdBuffer, feature, viewport);
